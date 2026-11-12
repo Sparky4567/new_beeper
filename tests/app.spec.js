@@ -1,4 +1,69 @@
 import { test, expect } from "@playwright/test";
+import { createServer } from "node:http";
+import { readFile } from "node:fs/promises";
+
+test("offline navigation survives the static host index.html redirect", async ({ page, context }) => {
+  const server = createServer(async (request, response) => {
+    const path = new URL(request.url, "http://localhost").pathname;
+    if (path === "/index.html") {
+      response.writeHead(308, { Location: "/" }).end();
+      return;
+    }
+    const file = path === "/" ? "/index.html" : path;
+    const types = { html: "text/html", js: "text/javascript", css: "text/css", json: "application/json", svg: "image/svg+xml" };
+    try {
+      const body = await readFile(new URL(`../dist${file}`, import.meta.url));
+      response.writeHead(200, { "Content-Type": types[file.split(".").pop()] || "application/octet-stream" }).end(body);
+    } catch {
+      response.writeHead(404).end();
+    }
+  });
+  await new Promise(resolve => server.listen(0, "127.0.0.1", resolve));
+  try {
+    await page.goto(`http://127.0.0.1:${server.address().port}/`);
+    await page.evaluate(async () => {
+      await navigator.serviceWorker.ready;
+      if (!navigator.serviceWorker.controller) {
+        await new Promise(resolve => navigator.serviceWorker.addEventListener("controllerchange", resolve, { once: true }));
+      }
+    });
+    await context.setOffline(true);
+    await page.reload();
+    await expect(page.getByRole("heading", { name: /A little scan/ })).toBeVisible();
+    await page.getByRole("link", { name: "Start scanning" }).click();
+    await page.evaluate(() => { delete window.BarcodeDetector; });
+    await page.locator("input[type=file]").setInputFiles("tests/fixtures/qr-example.png");
+    await expect(page.getByText("CODE FOUND", { exact: true })).toBeVisible();
+  } finally {
+    await new Promise(resolve => server.close(resolve));
+  }
+});
+
+test("launches the cached shell without waiting for a stalled network", async ({ page, context }) => {
+  await page.goto("/");
+  await page.evaluate(async () => {
+    await navigator.serviceWorker.ready;
+    if (!navigator.serviceWorker.controller) {
+      await new Promise(resolve => navigator.serviceWorker.addEventListener("controllerchange", resolve, { once: true }));
+    }
+    const cacheName = (await caches.keys()).find(name => name.startsWith("beeper-"));
+    const cache = await caches.open(cacheName);
+    await cache.put("/index.html", new Response("<h1>Stale cached page</h1>", {
+      headers: { "Content-Type": "text/html" },
+    }));
+  });
+  // Cache-first navigation must not wait for even a successful online request.
+  await context.route("**/*", () => {});
+  await page.reload({ waitUntil: "domcontentloaded", timeout: 5000 });
+  await expect(page.getByRole("heading", { name: "Stale cached page" })).toBeVisible();
+  await context.unrouteAll({ behavior: "ignoreErrors" });
+  await context.setOffline(true);
+  const launchUrl = page.url();
+  await page.close();
+  page = await context.newPage();
+  await page.goto(launchUrl);
+  await expect(page.getByRole("heading", { name: "Stale cached page" })).toBeVisible();
+});
 
 test("backs up saved codes and deletions to the Bun SQLite host", async ({ page }) => {
   test.skip(!process.env.SQLITE_E2E, "Requires the optional Bun host");
@@ -21,6 +86,7 @@ test("backs up saved codes and deletions to the Bun SQLite host", async ({ page 
 
 test("cold reload, scan, save, show QR, and delete while offline", async ({ page, context }) => {
   await page.goto("/");
+  await expect(page.getByText("Ready to use offline", { exact: true })).toBeVisible();
   await page.evaluate(async () => {
     await navigator.serviceWorker.ready;
     if (!navigator.serviceWorker.controller) {
@@ -28,7 +94,10 @@ test("cold reload, scan, save, show QR, and delete while offline", async ({ page
     }
   });
   await context.setOffline(true);
-  await page.reload();
+  const launchUrl = page.url();
+  await page.close();
+  page = await context.newPage();
+  await page.goto(launchUrl);
   await page.getByRole("link", { name: "Start scanning" }).click();
   // First scan is offline: the lazy decoder chunk must already be cached.
   await page.evaluate(() => { delete window.BarcodeDetector; });

@@ -18,7 +18,7 @@ export function offlinePlugin() {
         }))).flat();
       }
       const paths = (await files()).sort();
-      const hash = createHash("sha256");
+      const hash = createHash("sha256").update("offline-v3");
       for (const path of paths) hash.update(await readFile(join(root, path)));
       const version = hash.digest("hex").slice(0, 16);
       const urls = paths.map((path) => config.base + path);
@@ -27,7 +27,26 @@ const CACHE = "beeper-${version}";
 const FILES = ${JSON.stringify(urls)};
 const SHELL = ${JSON.stringify(config.base + "index.html")};
 self.addEventListener("install", event => {
-  event.waitUntil(caches.open(CACHE).then(cache => cache.addAll(FILES)));
+  event.waitUntil((async () => {
+    const cache = await caches.open(CACHE);
+    await Promise.all(FILES.map(async path => {
+      // Also bypass CDN caches that can retain the previous HTML after deploy.
+      const source = new URL(path, self.location.origin);
+      source.searchParams.set("__beeper", CACHE);
+      const response = await fetch(new Request(source, { cache: "reload" }));
+      if (!response.ok) throw new Error("Failed to cache " + path + ": " + response.status);
+      // Static hosts redirect /index.html to /. Navigation requests cannot
+      // consume a cached response whose redirect flag is still set.
+      const stored = response.redirected
+        ? new Response(await response.blob(), {
+            status: response.status,
+            statusText: response.statusText,
+            headers: response.headers,
+          })
+        : response;
+      await cache.put(path, stored);
+    }));
+  })());
 });
 self.addEventListener("activate", event => {
   event.waitUntil((async () => {
@@ -41,8 +60,17 @@ self.addEventListener("fetch", event => {
   const url = new URL(event.request.url);
   if (event.request.method !== "GET" || url.origin !== self.location.origin) return;
   if (url.pathname.startsWith(${JSON.stringify(config.base + "api/")})) return;
+  if (event.request.mode === "navigate") {
+    event.respondWith((async () => {
+      const cache = await caches.open(CACHE);
+      // Launch immediately from the installed version, even on a connection
+      // that hangs rather than failing. New versions install separately.
+      return await cache.match(SHELL) || fetch(event.request);
+    })());
+    return;
+  }
   // Never cache data APIs or unrelated requests.
-  const path = event.request.mode === "navigate" ? SHELL : url.pathname;
+  const path = url.pathname;
   if (!FILES.includes(path)) return;
   event.respondWith((async () => {
     const cache = await caches.open(CACHE);

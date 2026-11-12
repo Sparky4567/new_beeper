@@ -18,24 +18,52 @@ npm run preview
 
 Vite prints the development URL. Camera access requires HTTPS or localhost; opening a LAN HTTP address on a phone will not allow camera access. Image uploads provide an alternative.
 
-## Cloudflare Workers / Wrangler migration
+## Cloudflare Pages deployment
 
-`wrangler.jsonc` deploys `dist/` using Workers Static Assets with single-page application fallback. No server Worker, legacy Workers Sites bucket, KV namespace, or Durable Object migration is needed for this browser-only app.
+The production app is hosted at https://beeper.artefaktas.eu on the Cloudflare
+Pages project `new-beeper` (production branch `main`). `wrangler.jsonc` sets
+`pages_build_output_dir` to `dist/`. Deploy the regular browser-only build;
+the optional Bun/SQLite server is not deployed to Pages.
 
 ```sh
-npm run deploy:check     # build and validate deployment without publishing
-npm run preview:worker  # build and serve using Wrangler locally
-npx wrangler login      # authenticate your Cloudflare account
-npm run deploy          # build and publish
+npm run build
+npx wrangler pages dev dist             # optional local Pages preview
+npx wrangler login                     # authenticate if needed
+npx wrangler pages deploy dist --project-name new-beeper --branch main
 ```
 
-Before publishing, set the Worker `name` in `wrangler.jsonc` to the intended target. For Cloudflare Workers Builds, use `npm run build` as the build command and `npx wrangler deploy` as the deploy command. For external CI, provide `CLOUDFLARE_ACCOUNT_ID` and `CLOUDFLARE_API_TOKEN` through secret environment variables. Do not commit credentials.
+For Git-connected Pages builds, use the repository root as the build directory,
+`npm run build` as the build command, and `dist` as the output directory. Commit
+the source files, `package.json`, and `package-lock.json` before pushing to
+`main`. For external CI, provide `CLOUDFLARE_ACCOUNT_ID` and
+`CLOUDFLARE_API_TOKEN` through secret environment variables.
 
-For an existing Pages or other hosting deployment, first deploy the Worker at its preview address, verify scanning and collection behavior, then move the custom domain in Cloudflare. Keep the original origin/domain to retain access to existing browser data. Browser storage is origin-specific: records are not automatically transferred to a different hostname or browser. Show important records as QR codes before switching origins and scan them on the new origin if needed.
+Keep the same domain to retain access to existing browser records. Browser
+storage belongs to each origin: the Pages preview URL and production custom
+domain have separate collections and separate offline installations.
 
-Reference: [Cloudflare SPA deployment](https://developers.cloudflare.com/workers/static-assets/routing/single-page-application/) and [Wrangler configuration](https://developers.cloudflare.com/workers/wrangler/configuration/).
+The package's older Worker deployment scripts are not used for this Pages
+configuration; use the explicit `wrangler pages` commands above.
 
 ## Offline use and optional SQLite backup
+
+### Install the offline PWA
+
+1. Open https://beeper.artefaktas.eu online on the device you will use.
+2. Wait for **Ready to use offline** in the app header.
+3. Choose **Install app** in your browser, or **Add to Home Screen** on iOS.
+4. Close all Beeper tabs and app windows, enable airplane mode, and reopen the
+   installed app. Scanning and your saved collection work without a server or
+   an internet connection. Following a scanned website link still needs internet.
+
+Setup is required once per browser/device. If setup fails, reconnect and reload.
+If an old version persists after deployment, open the site online with a fresh
+query string (for example `?setup=offline-v3`), then close every Beeper window
+and reopen it. Do not clear site data to update: that also deletes saved codes.
+Browser storage may be removed by browser cleanup, storage pressure, or private
+browsing; an installed PWA does not provide a permanent backup.
+
+### Resource caching
 
 Production builds generate and register a versioned service worker that precaches
 the app shell, styles, images, and lazy QR decoder. Open the app once online and
@@ -43,7 +71,17 @@ allow installation to finish before disconnecting. Reloading, scanning uploaded
 images, saving, searching, showing QR codes, and deleting work offline. Service
 workers require HTTPS or localhost; `npm start` is a development server and does
 not install one. Use `npm run build && npm run preview` to test offline behavior.
-Updates activate after tabs using the previous version close.
+After setup, page loads use the cached app shell immediately, without waiting
+for a network connection. Updates download in the background and activate after
+all open Beeper windows and tabs close.
+Precached responses are normalized after redirects so static hosting redirects
+such as `/index.html` → `/` do not prevent offline navigation.
+The service worker URL includes a build identifier, and precache downloads use
+versioned query strings to bypass stale CDN responses. Resources are stored in
+the browser Cache API; saved QR records remain in IndexedDB. SQLite is not
+needed to launch or use the installed PWA offline.
+
+### Optional local SQLite backup
 
 The browser keeps its existing PouchDB/IndexedDB `mainbase` collection. Bun's
 [`bun:sqlite`](https://bun.sh/docs/runtime/sqlite) runs in the Bun runtime, not in
@@ -78,11 +116,11 @@ hosting. Both build modes write to `dist/`, replacing the previous build.
 
 ## Verifying offline storage
 
-For a manual check, build and preview the app, open it online, then wait for the
-service worker to activate (DevTools → Application → Service Workers). Enable
-Offline in DevTools, reload, upload a QR image, save it, and open Collection.
-Reload again to confirm the saved code persists; show its QR and delete it while
-still offline. External links in scanned codes still need a network connection.
+For a manual check, build and preview the app, open it online, and wait for
+**Ready to use offline**. Disconnect, close the tab, and reopen the same URL in
+a new tab (or launch the installed PWA in airplane mode). Upload a QR image,
+save it, and open Collection. Reload to confirm it persists; show its QR and
+delete it while still offline. Also test camera scanning on the target device.
 
 Run the automated checks with the supported Node version and Bun installed:
 
@@ -99,8 +137,10 @@ Playwright starts and stops the appropriate server itself. SQLite integration
 tests use `/tmp/beeper-e2e.sqlite`, separate from the personal database in `data/`.
 They verify browser snapshots after saves and deletions; the storage test checks
 that snapshots survive reopening the database and remain isolated per browser.
-Desktop and mobile browser tests also exercise offline reload and first-use QR
-decoding with no network access.
+Desktop and mobile browser tests exercise closing and reopening a tab offline,
+first-use QR decoding, saved records, static-host HTML redirects, and a stalled
+network that must not delay loading the cached shell. Browser automation does
+not exercise the operating system's PWA installation flow.
 
 ## Dependencies
 
@@ -114,4 +154,3 @@ The app uses React 19, Vite 8, React Router 7, PouchDB 9, and Wrangler 4. Duplic
 - QR payloads are displayed as text; only HTTP and HTTPS links are clickable. Camera tracks stop when scanning completes or the scanner page closes.
 - The old committed `build/` folder is a historical CRA output. It is not used by Vite or Wrangler; publish `dist/` only.
 - Automated checks cover search regressions, deletion, storage and camera failure states, and URL handling. Test actual camera permission and scanning on target mobile devices before production cutover.
-# new_beeper

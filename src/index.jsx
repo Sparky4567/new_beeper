@@ -21,8 +21,3 @@ if (import.meta.env.VITE_SQLITE_BACKUP === "true") {
   window.addEventListener("online", scheduleBackup);
   window.setInterval(scheduleBackup, 30000);
 }
-
-if (import.meta.env.PROD && "serviceWorker" in navigator) {
-  navigator.serviceWorker.register(`${import.meta.env.BASE_URL}sw.js`)
-    .catch((error) => console.error("Offline setup failed:", error));
-}

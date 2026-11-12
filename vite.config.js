@@ -3,7 +3,10 @@ import { offlinePlugin } from "./offline-plugin.js";
 
 export default defineConfig({
   plugins: [offlinePlugin()],
-  define: { global: "globalThis" },
+  define: {
+    global: "globalThis",
+    "import.meta.env.VITE_BUILD_ID": JSON.stringify(Date.now().toString(36)),
+  },
   resolve: { alias: { events: "events/" } },
   build: {
     rolldownOptions: {

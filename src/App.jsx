@@ -2,6 +2,7 @@ import React, { useEffect, useRef, useState } from "react";
 import { NavLink, Route, Routes, Link } from "react-router-dom";
 import QrScanner from "qr-scanner";
 import QrCreator from "qr-creator";
+import OfflineStatus from "./OfflineStatus.jsx";
 import { database, filterRecords, getRecords, safeUrl } from "./database";
 
 function Icon({ name, ...props }) {
@@ -471,9 +472,7 @@ export default function App() {
             <span>Collection</span>
           </NavLink>
         </nav>
-        <span className="header-note">
-          <span className="status-dot" /> Stored on your device
-        </span>
+        <OfflineStatus />
       </header>
       <main id="main">
         <Routes>
